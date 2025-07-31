@@ -1,16 +1,16 @@
 
 # Click Bot 🤖
 
-A simple automation tool using Puppeteer to simulate human-like search and click behavior on Google search results.
+Tool tự động click quảng cáo đối thủ.
 
 ## Features
 
-- Search keyword on Google
-- Detect target domain in search results
-- Click on the matched domain
-- Simulate human interaction (scrolling, clicking, mouse movement)
-- Looping with delay
-- Robust retry on timeout or errors
+- Tìm kiếm từ khóa trên Google
+- Phát hiện tên miền mục tiêu trong kết quả tìm kiếm
+- Tự động nhấp vào liên kết chứa tên miền khớp
+- Giả lập hành vi người dùng (cuộn trang, nhấp chuột, di chuyển chuột)
+- Lặp lại quá trình với độ trễ giữa các vòng lặp
+- Tự động thử lại khi gặp lỗi hoặc hết thời gian chờ
 
 ## Tech Stack
 
