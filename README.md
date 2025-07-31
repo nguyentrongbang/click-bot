@@ -59,7 +59,7 @@ CHROME_WS_ENDPOINT=ws://localhost:9222/devtools/browser/your-browser-id
 
 1. After launching Chrome with remote debugging:
    ```bash
-   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 -user-data-dir="$HOME/chrome-bot-profile"
+   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --start-maximized -user-data-dir="$HOME/chrome-bot-profile"
    ```
 
 2. Open your browser and visit:
