@@ -59,12 +59,12 @@ CHROME_WS_ENDPOINT=ws://localhost:9222/devtools/browser/your-browser-id
 
 1. After launching Chrome with remote debugging:
    ```bash
-   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 -user-data-dir="$HOME/chrome-bot-profile"
    ```
 
 2. Open your browser and visit:
    ```
-   http://localhost:9222/json
+   http://localhost:9222/json/version
    ```
 
 3. Look for the first item in the returned JSON array, and copy the value of `"webSocketDebuggerUrl"`, e.g.:
