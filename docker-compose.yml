@@ -5,3 +5,5 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      - CHROME_WS_ENDPOINT=${CHROME_WS_ENDPOINT}

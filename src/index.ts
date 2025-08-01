@@ -1,11 +1,23 @@
 import puppeteer, { Page } from "puppeteer-core";
+import axios from "axios";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const KEYWORD = process.env.KEYWORD || "net88";
 const TARGET_DOMAIN = process.env.TARGET_DOMAIN || "net88.com";
-const CHROME_WS_ENDPOINT = process.env.CHROME_WS_ENDPOINT!;
+
+// Tự động lấy ws endpoint từ Chrome
+async function getChromeWSEndpoint(): Promise<string> {
+  try {
+    const res = await axios.get("http://host.docker.internal:9222/json/version");
+    const wsUrl = res.data.webSocketDebuggerUrl;
+    return wsUrl.replace("127.0.0.1", "host.docker.internal");
+  } catch (err: any) {
+    console.error("❌ Không thể lấy ws endpoint từ Chrome:", err.message);
+    process.exit(1);
+  }
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -17,7 +29,6 @@ async function simulateUser(page: Page) {
 
   const actions = [
     async () => {
-      // Di chuyển chuột ngẫu nhiên
       const x = random(100, 1000);
       const y = random(100, 700);
       console.log(`🖱 Moving mouse to (${x}, ${y})`);
@@ -25,21 +36,18 @@ async function simulateUser(page: Page) {
       await sleep(random(300, 800));
     },
     async () => {
-      // Cuộn trang xuống
       const deltaY = random(100, 600);
       console.log(`📜 Scrolling down: ${deltaY}`);
       await page.mouse.wheel({ deltaY });
       await sleep(random(500, 1200));
     },
     async () => {
-      // Cuộn trang lên
       const deltaY = random(100, 300);
       console.log(`📜 Scrolling up: ${deltaY}`);
       await page.mouse.wheel({ deltaY: -deltaY });
       await sleep(random(500, 1200));
     },
     async () => {
-      // Hover + có thể click vào link
       const links = await page.$$("a");
       if (links.length) {
         const link = links[random(0, links.length - 1)];
@@ -64,8 +72,6 @@ async function simulateUser(page: Page) {
                   }),
               ]);
             }
-          } else {
-            console.warn("⚠️ Skipped link: not visible");
           }
         } catch (e: any) {
           console.warn("⚠️ Error on link hover/click:", e.message);
@@ -73,7 +79,6 @@ async function simulateUser(page: Page) {
       }
     },
     async () => {
-      // Hover button
       const buttons = await page.$$("button");
       if (buttons.length) {
         const button = buttons[random(0, buttons.length - 1)];
@@ -83,8 +88,6 @@ async function simulateUser(page: Page) {
             console.log(`🔘 Hovering a button`);
             await button.hover();
             await sleep(random(300, 800));
-          } else {
-            console.warn("⚠️ Skipped button: not visible");
           }
         } catch (e: any) {
           console.warn("⚠️ Error on button hover:", e.message);
@@ -108,18 +111,24 @@ async function simulateUser(page: Page) {
 
 async function run() {
   try {
+    const CHROME_WS_ENDPOINT = process.env.CHROME_WS_ENDPOINT!;
+
     const browser = await puppeteer.connect({
       browserWSEndpoint: CHROME_WS_ENDPOINT,
       defaultViewport: null,
+      protocolTimeout: 60000,
     });
 
     const page = await browser.newPage();
-    console.log(`🔍 Searching for: ${KEYWORD}`);
 
-    await page.goto("https://whatismyipaddress.com/", {
+    await page.goto("https://whatismyipaddress.com", {
       waitUntil: "domcontentloaded",
     });
-    
+
+    await sleep(5000);
+
+    console.log(`🔍 Searching for: ${KEYWORD}`);
+
     await page.goto("https://www.google.com", {
       waitUntil: "domcontentloaded",
     });
@@ -133,6 +142,8 @@ async function run() {
       timeout: 60000,
     });
 
+    await sleep(3000);
+
     const links = await page.$$("a");
     for (const link of links) {
       const href = await link.evaluate((el) => el.getAttribute("href") || "");
@@ -141,7 +152,7 @@ async function run() {
 
         const oldPages = await browser.pages();
         await link.click({ delay: 100 });
-        await sleep(3000); // đợi xem tab mới có mở không
+        await sleep(3000);
 
         const newPages = await browser.pages();
         const newTab = newPages.find((p) => !oldPages.includes(p));
@@ -172,7 +183,7 @@ async function run() {
       console.error("❌ Unknown error occurred:", err);
     }
     console.log("🔁 Restarting...");
-    await sleep(5000); // đợi một chút rồi chạy lại
+    await sleep(5000);
     await run();
   }
 }
