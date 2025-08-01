@@ -7,18 +7,6 @@ dotenv.config();
 const KEYWORD = process.env.KEYWORD || "net88";
 const TARGET_DOMAIN = process.env.TARGET_DOMAIN || "net88.com";
 
-// Tự động lấy ws endpoint từ Chrome
-async function getChromeWSEndpoint(): Promise<string> {
-  try {
-    const res = await axios.get("http://host.docker.internal:9222/json/version");
-    const wsUrl = res.data.webSocketDebuggerUrl;
-    return wsUrl.replace("127.0.0.1", "host.docker.internal");
-  } catch (err: any) {
-    console.error("❌ Không thể lấy ws endpoint từ Chrome:", err.message);
-    process.exit(1);
-  }
-}
-
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -176,16 +164,20 @@ async function run() {
     await sleep(10000);
     await page.close();
     await run();
-  } catch (err) {
-    if (err instanceof Error) {
-      console.error("❌ Error occurred:", err.message);
-    } else {
-      console.error("❌ Unknown error occurred:", err);
-    }
-    console.log("🔁 Restarting...");
+  } catch (err: any) {
+    console.error("❌ Error in run():", err.message || err);
+    console.log("🔁 Restarting after 5s...");
     await sleep(5000);
-    await run();
+    await run(); // retry loop
   }
 }
+
+// Catch global unhandled errors
+process.on("unhandledRejection", (reason) => {
+  console.error("❗ Unhandled Rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("❗ Uncaught Exception:", err);
+});
 
 run();
