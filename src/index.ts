@@ -116,6 +116,10 @@ async function run() {
     const page = await browser.newPage();
     console.log(`🔍 Searching for: ${KEYWORD}`);
 
+    await page.goto("https://whatismyipaddress.com/", {
+      waitUntil: "domcontentloaded",
+    });
+    
     await page.goto("https://www.google.com", {
       waitUntil: "domcontentloaded",
     });
