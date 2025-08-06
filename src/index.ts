@@ -109,11 +109,11 @@ async function run() {
 
     const page = await browser.newPage();
 
-    await page.goto("https://whatismyipaddress.com", {
-      waitUntil: "domcontentloaded",
-    });
+    // await page.goto("https://whatismyipaddress.com", {
+    //   waitUntil: "domcontentloaded",
+    // });
 
-    await sleep(5000);
+    // await sleep(5000);
 
     console.log(`🔍 Searching for: ${KEYWORD}`);
 
@@ -130,7 +130,7 @@ async function run() {
       timeout: 60000,
     });
 
-    await sleep(3000);
+    await sleep(1000);
 
     const links = await page.$$("a");
     for (const link of links) {
@@ -161,7 +161,7 @@ async function run() {
     }
 
     console.log("⏳ Waiting before next round...");
-    await sleep(10000);
+    await sleep(5000);
     await page.close();
     await run();
   } catch (err: any) {

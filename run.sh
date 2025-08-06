@@ -1,28 +1,30 @@
 #!/bin/bash
 
-# 1. Khởi động Chrome với remote debugging (ghi log vào tệp tạm)
-echo "🚀 Starting Chrome with remote debugging..."
+# 🧠 Index của instance, ví dụ: 0, 1, 2,...
+INDEX=$1
+PORT=$((9222 + INDEX))
+PROFILE_DIR="$HOME/chrome-bot-profile-$INDEX"
 CHROME_LOG=$(mktemp)
+
+echo "🚀 Starting Chrome instance #$INDEX on port $PORT..."
+
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --remote-debugging-port=9222 \
+  --remote-debugging-port=$PORT \
   --remote-debugging-address=0.0.0.0 \
   --remote-allow-origins=* \
-  --user-data-dir="$HOME/chrome-bot-profile" \
+  --user-data-dir="$PROFILE_DIR" \
   --no-first-run \
   --no-default-browser-check > "$CHROME_LOG" 2>&1 &
 
-# 2. Đợi đến khi Chrome in ra dòng có ws URL
 echo "⌛ Waiting for Chrome to print WebSocket URL..."
 while ! grep -q "DevTools listening on ws://" "$CHROME_LOG"; do
   sleep 1
 done
 
-# 3. Trích xuất WebSocket URL và thay localhost => host.docker.internal
 RAW_WS_URL=$(grep "DevTools listening on ws://" "$CHROME_LOG" | tail -n1 | awk '{print $NF}')
 WS_URL=${RAW_WS_URL/127.0.0.1/host.docker.internal}
-echo "✅ WS URL found: $WS_URL"
 
-# 4. Chạy Docker và truyền biến môi trường vào
-echo "🐳 Starting Docker container..."
-WS_URL_ESCAPED=$(printf '%q' "$WS_URL")
-CHROME_WS_ENDPOINT="$WS_URL" docker compose up --build
+echo "✅ WS URL for instance #$INDEX: $WS_URL"
+
+# 🐳 Chạy Docker container, với tên riêng biệt và endpoint riêng
+CHROME_WS_ENDPOINT="$WS_URL" docker compose -p clickbot-$INDEX up --build
