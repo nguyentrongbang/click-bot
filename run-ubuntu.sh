@@ -12,6 +12,7 @@ echo "$CHROME_LOG"
 
 google-chrome \
   --no-sandbox \
+  --headless=new \
   --remote-debugging-port=$PORT \
   --remote-debugging-address=0.0.0.0 \
   --remote-allow-origins=* \
