@@ -109,11 +109,11 @@ async function run() {
 
     const page = await browser.newPage();
 
-    // await page.goto("https://whatismyipaddress.com", {
-    //   waitUntil: "domcontentloaded",
-    // });
+    await page.goto("https://api.ipify.org");
+    const ip = await page.evaluate(() => document.body.innerText);
+    console.log("💡 IP công khai của bạn là:", ip);
 
-    // await sleep(5000);
+    await sleep(1000);
 
     console.log(`🔍 Searching for: ${KEYWORD}`);
 
@@ -133,6 +133,13 @@ async function run() {
     await sleep(1000);
 
     const links = await page.$$("a");
+
+    if (links.length === 0) {
+      console.log("❌ Không tìm thấy link nào trên trang.");
+    } else {
+      console.log(`✅ Tìm thấy ${links.length} link.`);
+    }
+
     for (const link of links) {
       const href = await link.evaluate((el) => el.getAttribute("href") || "");
       if (href.includes(TARGET_DOMAIN)) {
@@ -157,6 +164,8 @@ async function run() {
 
         console.log("🌀 Simulated user activity...");
         break;
+      } else {
+        console.log(href);
       }
     }
 
