@@ -7,6 +7,8 @@ PROFILE_DIR="$HOME/chrome-bot-profile-$INDEX"
 CHROME_LOG=$(mktemp)
 
 echo "🚀 Starting Chrome instance #$INDEX on port $PORT..."
+echo "$PROFILE_DIR"
+echo "$CHROME_LOG"
 
 google-chrome \
   --remote-debugging-port=$PORT \
@@ -14,12 +16,7 @@ google-chrome \
   --remote-allow-origins=* \
   --user-data-dir="$PROFILE_DIR" \
   --no-first-run \
-  --no-default-browser-check \
-  --disable-popup-blocking \
-  --disable-default-apps \
-  --disable-background-networking \
-  --disable-sync \
-  --disable-translate > "$CHROME_LOG" 2>&1 &
+  --no-default-browser-check > "$CHROME_LOG" 2>&1 &
 
 echo "⌛ Waiting for Chrome to print WebSocket URL..."
 while ! grep -q "DevTools listening on ws://" "$CHROME_LOG"; do
