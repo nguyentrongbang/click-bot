@@ -11,6 +11,7 @@ echo "$PROFILE_DIR"
 echo "$CHROME_LOG"
 
 google-chrome \
+  --no-sandbox \
   --remote-debugging-port=$PORT \
   --remote-debugging-address=0.0.0.0 \
   --remote-allow-origins=* \
