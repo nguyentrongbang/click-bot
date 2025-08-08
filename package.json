@@ -1,20 +1,8 @@
 {
-    "name": "click-bot",
-    "version": "1.0.0",
-    "type": "commonjs",
-    "main": "dist/index.js",
-    "scripts": {
-        "start": "ts-node src/index.ts"
-    },
-    "dependencies": {
-        "axios": "^1.11.0",
-        "dotenv": "^16.3.1",
-        "puppeteer": "^24.15.0",
-        "puppeteer-core": "^21.11.0"
-    },
-    "devDependencies": {
-        "@types/puppeteer": "^5.4.7",
-        "ts-node": "^10.9.1",
-        "typescript": "^5.2.2"
-    }
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^17.2.1",
+    "gologin": "^2.1.30",
+    "puppeteer": "^24.16.0"
+  }
 }
