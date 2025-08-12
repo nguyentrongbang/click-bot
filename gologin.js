@@ -312,7 +312,7 @@ async function main() {
     const tasks = Array.from({ length: CONCURRENCY }, (_, idx) => runOne(idx + 1));
     await Promise.all(tasks);
     // nghỉ giữa các batch
-    await sleep(3000 + Math.floor(Math.random() * 4000));
+    // await sleep(3000 + Math.floor(Math.random() * 4000));
   }
 }
 
