@@ -14,8 +14,15 @@ dotenv.config();
  * KEYWORD="bài ca đi cùng năm tháng"
  * TARGET_DOMAIN="bcdcnt.net"
  * (tùy chọn) CONCURRENCY=3
- * (tùy chọn) BATCH_PAUSE_MS=3000   // nghỉ giữa các batch
+ *
+ * Chạy: node gologin.js 5  -> 5 luồng song song
  */
+
+// ======= CỜ HÀNH VI (thay đổi nếu cần) =======
+const SINGLE_TAB_ONLY = true;        // dọn tab rỗng + không mở tab mới
+const RANDOM_LINK_CLICK = false;     // tắt click ngẫu nhiên trong simulateUser
+const OPEN_RESULT_IN_NEW_TAB = false; // false = click trái trong cùng tab; true = middle-click mở tab mới
+// ============================================
 
 const GL_API_TOKEN = process.env.GL_API_TOKEN || "";
 const PROXY_MODE = process.env.PROXY_MODE || "http";
@@ -25,9 +32,7 @@ const PROXY_USERNAME = process.env.PROXY_USERNAME || "";
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || "";
 const KEYWORD = process.env.KEYWORD || "bài ca đi cùng năm tháng";
 const TARGET_DOMAIN = (process.env.TARGET_DOMAIN || "bcdcnt.net").toLowerCase();
-
 const CONCURRENCY = Number(process.argv[2] || process.env.CONCURRENCY || 3);
-const BATCH_PAUSE_MS = Number(process.env.BATCH_PAUSE_MS || 3000);
 
 if (!GL_API_TOKEN) throw new Error("Missing GL_API_TOKEN");
 if (!PROXY_MODE) throw new Error("Missing PROXY_MODE");
@@ -38,7 +43,6 @@ if (!PROXY_PASSWORD) throw new Error("Missing PROXY_PASSWORD");
 
 const gologin = GologinApi({ token: GL_API_TOKEN });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const rand = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
 
 function safeMsg(err) {
   if (!err) return "Unknown error";
@@ -50,210 +54,211 @@ function safeMsg(err) {
 function logErr(i, err) {
   const http = err?.response || err?.res || err?.raw || {};
   const body = http.body || http.data;
-
   let parsedBody = body;
   if (typeof body === "string") {
     try { parsedBody = JSON.parse(body); } catch { parsedBody = body; }
   }
   console.error(
-    "------------------------------------------------------------\n" +
-      `[${i}] ERROR >>> ${safeMsg(err)}\n` +
-      (http.statusCode || http.status ? `status=${http.statusCode || http.status}\n` : ``) +
-      (http.url || http.requestUrl ? `url=${http.url || http.requestUrl}\n` : ``) +
-      (parsedBody ? `body=${typeof parsedBody === "string" ? parsedBody : JSON.stringify(parsedBody)}\n` : ``) +
-      (err?.stack ? `stack=${err.stack}\n` : ``) +
-    "------------------------------------------------------------"
+    `------------------------------------------------------------\n` +
+    `[${i}] ERROR >>> ${safeMsg(err)}\n` +
+    (err?.stack ? `stack=${err.stack}\n` : ``) +
+    (http.statusCode || http.status ? `status=${http.statusCode || http.status}\n` : ``) +
+    (http.url || http.requestUrl ? `url=${http.url || http.requestUrl}\n` : ``) +
+    (parsedBody ? `body=${typeof parsedBody === "string" ? parsedBody : JSON.stringify(parsedBody)}\n` : ``) +
+    `------------------------------------------------------------`
   );
 }
 
-async function dismissGoogleOverlays(page) {
-  // polyfill waitForTimeout nếu cần (đề phòng code khác gọi)
-  if (typeof page.waitForTimeout !== "function") {
-    page.waitForTimeout = (ms) => new Promise((r) => setTimeout(r, ms));
-  }
-
+async function ensureGoogleReady(page) {
+  // popup đồng ý cookie
   try {
-    // Cookie consent phổ biến (nút Đồng ý)
-    const agreeSelList = [
-      '#L2AGLb',
-      'button[aria-label*="Đồng ý"]',
-      'button[aria-label="Accept all"]',
-      'form[action*="consent"] button',
-    ];
-    for (const sel of agreeSelList) {
-      const el = await page.$(sel);
-      if (el) {
-        await el.click().catch(() => {});
-        await sleep(600);
-        break;
+    const agree = await page.$('#L2AGLb');
+    if (agree) { await agree.click(); await sleep(800); }
+  } catch {}
+  // hộp chào đăng nhập (nếu có)
+  try {
+    await page.evaluate(() => {
+      const sel = [
+        '[role="dialog"] [aria-label="Close"]',
+        '[jsname="adVhW"]', // nút close phổ biến
+        '[data-dismiss]'
+      ];
+      for (const s of sel) {
+        const el = document.querySelector(s);
+        if (el) { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
       }
-    }
+    });
+  } catch {}
+}
 
-    // Thử xử lý trong iframe consent (một số layout Google để consent trong iframe)
-    const frames = page.frames();
-    for (const f of frames) {
-      try {
-        const btn = await f.$('button[aria-label="Accept all"], #L2AGLb');
-        if (btn) {
-          await btn.click().catch(() => {});
-          await sleep(600);
-          break;
-        }
-      } catch {}
-    }
+async function dismissGoogleOverlays(page) {
+  try {
+    // tắt banner nhỏ chào đăng nhập hoặc mini dialog
+    await page.evaluate(() => {
+      const closeButtons = Array.from(document.querySelectorAll('button, div[role="button"]'))
+        .filter(btn => /đóng|close/i.test(btn.textContent || '') || btn.getAttribute('aria-label') === 'Close');
+      closeButtons.slice(0, 2).forEach(btn => btn.click());
+    });
+  } catch {}
+  await sleep(400);
+}
 
-    // Đóng vài dialog “No thanks / Not now”
-    const miscSelectors = [
-      'button[aria-label="No thanks"]',
-      'button[jsname="d0qKfc"]',
-      '[role="dialog"] button:not([disabled])',
-    ];
-    for (const sel of miscSelectors) {
-      const el = await page.$(sel);
-      if (el) {
-        await el.click().catch(() => {});
-        await sleep(400);
+async function safeHoverMaybeClick(page, handle, { clickProb = 0 } = {}) {
+  try {
+    const box = await handle.boundingBox();
+    if (box && box.width > 1 && box.height > 1) {
+      await handle.hover();
+      await sleep(300 + Math.floor(Math.random() * 400));
+      if (Math.random() < clickProb) {
+        await Promise.allSettled([
+          handle.click({ delay: 100 }),
+          page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 8000 }),
+        ]);
       }
     }
   } catch (e) {
-    console.warn("dismissGoogleOverlays warn:", safeMsg(e));
+    // phần tử có thể không còn hiện hữu sau điều hướng
   }
 }
 
 async function simulateUser(page) {
   const hasWheel = typeof page.mouse?.wheel === "function";
-
+  const random = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+  // Hành vi nhẹ nhàng, không click ngẫu nhiên
   const actions = [
     async () => {
-      const x = rand(100, 1200), y = rand(100, 800);
-      await page.mouse.move(x, y, { steps: 20 });
-      await sleep(rand(300, 800));
+      const x = random(100, 1000);
+      const y = random(100, 700);
+      await page.mouse.move(x, y, { steps: 18 });
+      await sleep(random(250, 650));
     },
     async () => {
       if (hasWheel) {
-        await page.mouse.wheel({ deltaY: rand(200, 800) });
+        await page.mouse.wheel({ deltaY: random(200, 800) });
       } else {
-        await page.evaluate((dy) => window.scrollBy(0, dy), rand(200, 800));
+        await page.evaluate((dy) => window.scrollBy(0, dy), random(200, 800));
       }
-      await sleep(rand(500, 1200));
+      await sleep(random(400, 900));
     },
     async () => {
       if (hasWheel) {
-        await page.mouse.wheel({ deltaY: -rand(200, 600) });
+        await page.mouse.wheel({ deltaY: -random(150, 550) });
       } else {
-        await page.evaluate((dy) => window.scrollBy(0, -dy), rand(200, 600));
+        await page.evaluate((dy) => window.scrollBy(0, -dy), random(150, 550));
       }
-      await sleep(rand(500, 1200));
+      await sleep(random(400, 900));
     },
     async () => {
-      const links = await page.$$("a");
-      if (!links.length) return;
-      const link = links[rand(0, links.length - 1)];
-      try {
-        const box = await link.boundingBox();
-        if (box) {
-          await link.hover();
-          await sleep(rand(300, 800));
-          if (Math.random() < 0.15) {
-            await Promise.allSettled([
-              link.click({ delay: 80 }),
-              page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }),
-            ]);
-          }
+      if (RANDOM_LINK_CLICK) {
+        const links = await page.$$("a");
+        if (links.length) {
+          const link = links[random(0, links.length - 1)];
+          await safeHoverMaybeClick(page, link, { clickProb: 0 }); // giữ 0 để chỉ hover
         }
-      } catch (e) {
-        console.warn("⚠️ simulateUser link:", safeMsg(e));
       }
     },
   ];
 
-  const rounds = rand(6, 12);
+  const rounds = random(5, 9);
   for (let i = 0; i < rounds; i++) {
-    const action = actions[rand(0, actions.length - 1)];
-    try { await action(); }
-    catch (e) { console.warn("⚠️ simulateUser error:", safeMsg(e)); }
+    const action = actions[random(0, actions.length - 1)];
+    try { await action(); } catch {}
+  }
+}
+
+async function closeBlankTabs(browser) {
+  const pages = await browser.pages();
+  for (const p of pages) {
+    const u = p.url();
+    if (!u || u === "about:blank" || u.startsWith("chrome://")) {
+      if (pages.length > 1) {
+        try { await p.close(); } catch {}
+      }
+    }
   }
 }
 
 async function doGoogleSearch(i, browser, keyword, targetDomain) {
   const page = await browser.newPage();
-  // polyfill phòng code gọi waitForTimeout ở nơi khác
-  if (typeof page.waitForTimeout !== "function") {
-    page.waitForTimeout = (ms) => new Promise((r) => setTimeout(r, ms));
-  }
 
-  // Tải Google
   await page.goto("https://www.google.com/?hl=vi", {
     waitUntil: "domcontentloaded",
     timeout: 60000,
-  }).catch(() => {});
+  });
 
+  await ensureGoogleReady(page);
   await dismissGoogleOverlays(page);
 
-  // Gõ từ khóa
   await page.waitForSelector('textarea[name="q"]', { timeout: 15000 });
   await page.type('textarea[name="q"]', keyword, { delay: 50 });
   await page.keyboard.press("Enter");
 
-  // Chờ kết quả 2 pha để giảm timeout
+  // chờ kết quả
   await Promise.race([
     page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60000 }),
-    (async () => {
-      await sleep(4000);
-      try { await page.waitForSelector("#search", { timeout: 60000 }); } catch {}
-    })(),
-  ]).catch(() => {});
-
-  await sleep(1000);
+    sleep(7000), // fallback nếu Google không điều hướng trang (SPA)
+  ]);
+  await sleep(800);
   await dismissGoogleOverlays(page);
 
-  console.log(`[${i}] Search: "${keyword}" -> click domain contains "${targetDomain}"`);
+  // Tìm link chứa domain
+  const linkHandles = await page.$$("a");
+  console.log(`[${i}] Search: "${keyword}" -> target: "${targetDomain}" (links: ${linkHandles.length})`);
 
-  // Thử click mở tab mới để tránh “context destroyed”
-  const links = await page.$$("a");
   let clicked = false;
-
-  for (const link of links) {
-    const href = (await link.evaluate((el) => el.getAttribute("href") || "")).toLowerCase();
+  for (const link of linkHandles) {
+    let href = "";
+    try {
+      href = (await link.evaluate(el => el.getAttribute("href") || "")).toLowerCase();
+    } catch {}
     if (!href) continue;
-
     if (href.includes(targetDomain)) {
       console.log(`[${i}] ✅ Found: ${href}`);
-      const oldPages = await browser.pages();
 
-      // Middle-click để mở tab mới, an toàn hơn
-      await link.click({ button: "middle", delay: 60 }).catch(() => {});
-
-      // Đợi tab mới
-      await sleep(2500);
-      const newPages = await browser.pages();
-      const newTab = newPages.find((p) => !oldPages.includes(p));
-
-      if (newTab) {
-        await newTab.bringToFront();
-        await simulateUser(newTab);
-        await newTab.close().catch(() => {});
+      if (OPEN_RESULT_IN_NEW_TAB || !SINGLE_TAB_ONLY) {
+        // mở tab mới
+        const before = await browser.pages();
+        await Promise.allSettled([
+          link.click({ button: "middle", delay: 80 }),
+          page.waitForNetworkIdle?.({ idleTime: 800, timeout: 8000 }).catch(() => {})
+        ]);
+        await sleep(1500);
+        const after = await browser.pages();
+        const newTab = after.find(p => !before.includes(p));
+        if (newTab) {
+          await newTab.bringToFront();
+          await simulateUser(newTab);
+          if (SINGLE_TAB_ONLY) await newTab.close();
+        } else {
+          await simulateUser(page);
+        }
       } else {
-        // fallback: vẫn ở trang hiện tại
+        // mở ngay trong cùng tab
+        await Promise.allSettled([
+          link.click({ delay: 80 }),
+          page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }),
+        ]);
+        await dismissGoogleOverlays(page);
         await simulateUser(page);
       }
+
       clicked = true;
       break;
     }
   }
 
   if (!clicked) {
-    // Không tìm thấy domain mục tiêu → cuộn xem vài link
+    // Không thấy domain → cuộn, hover vài link
     const topHrefs = await page.$$eval("a", (as) =>
-      as.map((a) => a.getAttribute("href") || "")
-        .filter((h) => h && !h.startsWith("/"))
-        .slice(0, 10)
+      as.map(a => a.getAttribute("href") || "")
+        .filter(h => h && !h.startsWith("/"))
+        .slice(0, 8)
     );
     console.log(`[${i}] No target link. Top hrefs:\n${topHrefs.join("\n")}`);
     await simulateUser(page);
   }
 
-  await page.close().catch(() => {});
+  await page.close();
 }
 
 async function runOne(i) {
@@ -274,13 +279,16 @@ async function runOne(i) {
       password: PROXY_PASSWORD,
     });
 
-    await sleep(800); // cho chắc proxy đã được patch
+    await sleep(600);
 
     console.log(`[${i}] Launching profile ${profileId}...`);
     const launched = await gologin.launch({ profileId });
     browser = launched.browser;
 
+    if (SINGLE_TAB_ONLY) await closeBlankTabs(browser);
+
     await doGoogleSearch(i, browser, KEYWORD, TARGET_DOMAIN);
+    await sleep(500 + Math.floor(Math.random() * 1000)); // nghỉ nhẹ
   } catch (err) {
     logErr(i, err);
   } finally {
@@ -298,20 +306,14 @@ async function runOne(i) {
 
 async function main() {
   console.log(`[INFO] Concurrency = ${CONCURRENCY}`);
-  // Batch đầu
-  {
-    const tasks = Array.from({ length: CONCURRENCY }, (_, idx) => runOne(idx + 1));
-    await Promise.all(tasks);
-  }
 
-  // Lặp vô hạn các batch tiếp theo
+  // chạy vô hạn theo batch
   while (true) {
-    await sleep(BATCH_PAUSE_MS + rand(0, 3000));
     const tasks = Array.from({ length: CONCURRENCY }, (_, idx) => runOne(idx + 1));
     await Promise.all(tasks);
+    // nghỉ giữa các batch
+    await sleep(3000 + Math.floor(Math.random() * 4000));
   }
 }
 
-main()
-  .catch(console.error)
-  .finally(gologin.exit);
+main().catch(console.error).finally(gologin.exit);
