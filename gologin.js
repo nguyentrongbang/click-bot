@@ -18,207 +18,236 @@ dotenv.config();
  * Chạy: node gologin.js 5  -> 5 luồng song song
  */
 
-const GL_API_TOKEN = process.env.GL_API_TOKEN || "";
-const PROXY_MODE = process.env.PROXY_MODE || "http";
-const PROXY_HOST = process.env.PROXY_HOST || "";
-const PROXY_PORT = process.env.PROXY_PORT || "";
+const GL_API_TOKEN   = process.env.GL_API_TOKEN || "";
+const PROXY_MODE     = process.env.PROXY_MODE || "http";
+const PROXY_HOST     = process.env.PROXY_HOST || "";
+const PROXY_PORT     = process.env.PROXY_PORT || "";
 const PROXY_USERNAME = process.env.PROXY_USERNAME || "";
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || "";
-const KEYWORD = process.env.KEYWORD || "bài ca đi cùng năm tháng";
-const TARGET_DOMAIN = (process.env.TARGET_DOMAIN || "bcdcnt.net").toLowerCase();
-const CONCURRENCY = Number(process.argv[2] || process.env.CONCURRENCY || 3);
+const KEYWORD        = process.env.KEYWORD || "bài ca đi cùng năm tháng";
+const TARGET_DOMAIN  = (process.env.TARGET_DOMAIN || "bcdcnt.net").toLowerCase();
+const CONCURRENCY    = Number(process.argv[2] || process.env.CONCURRENCY || 3);
 
-if (!GL_API_TOKEN) throw new Error("Missing GL_API_TOKEN");
-if (!PROXY_MODE) throw new Error("Missing PROXY_MODE");
-if (!PROXY_HOST) throw new Error("Missing PROXY_HOST");
-if (!PROXY_PORT) throw new Error("Missing PROXY_PORT");
+if (!GL_API_TOKEN)   throw new Error("Missing GL_API_TOKEN");
+if (!PROXY_MODE)     throw new Error("Missing PROXY_MODE");
+if (!PROXY_HOST)     throw new Error("Missing PROXY_HOST");
+if (!PROXY_PORT)     throw new Error("Missing PROXY_PORT");
 if (!PROXY_USERNAME) throw new Error("Missing PROXY_USERNAME");
 if (!PROXY_PASSWORD) throw new Error("Missing PROXY_PASSWORD");
 
 const gologin = GologinApi({ token: GL_API_TOKEN });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const NAV_TIMEOUT_MS = 120_000;
 
+/* ---------- logging helpers ---------- */
 function safeMsg(err) {
   if (!err) return "Unknown error";
   if (typeof err === "string") return err;
   if (err.message && typeof err.message === "string") return err.message;
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
-  }
+  try { return JSON.stringify(err); } catch { return String(err); }
 }
 
 function logErr(i, err) {
-  // trải body lỗi nếu có
   const http = err?.response || err?.res || err?.raw || {};
   const body = http.body || http.data;
 
   let parsedBody = body;
   if (typeof body === "string") {
-    try {
-      parsedBody = JSON.parse(body);
-    } catch {
-      parsedBody = body;
-    }
+    try { parsedBody = JSON.parse(body); } catch { parsedBody = body; }
   }
-
-  // cố gắng “unwrap” message nếu là object
-  let msg = err?.message;
-  if (msg && typeof msg === "object") {
-    try {
-      msg = JSON.stringify(msg);
-    } catch {
-      msg = String(msg);
-    }
-  }
-  if (!msg) msg = safeMsg(err);
 
   console.error(
     "------------------------------------------------------------\n" +
-      `[${i}] ERROR >>> ${msg}\n` +
-      (http.statusCode || http.status ? `status=${http.statusCode || http.status}\n` : ``) +
-      (http.url || http.requestUrl ? `url=${http.url || http.requestUrl}\n` : ``) +
-      (parsedBody
-        ? `body=${typeof parsedBody === "string" ? parsedBody : JSON.stringify(parsedBody)}\n`
-        : ``) +
-      (err?.stack ? `stack=${err.stack}\n` : ``) +
-      "------------------------------------------------------------"
+    `[${i}] ERROR >>> ${safeMsg(err)}\n` +
+    (http.statusCode || http.status ? `status=${http.statusCode || http.status}\n` : ``) +
+    (http.url || http.requestUrl ? `url=${http.url || http.requestUrl}\n` : ``) +
+    (parsedBody ? `body=${typeof parsedBody === "string" ? parsedBody : JSON.stringify(parsedBody)}\n` : ``) +
+    (err?.stack ? `stack=${err.stack}\n` : ``) +
+    "------------------------------------------------------------"
   );
 }
 
-async function ensureGoogleReady(page) {
-  // Bấm đồng ý cookie/consent nếu có (một vài selector phổ biến)
-  try {
-    const selectors = [
-      '#L2AGLb',
-      'button[aria-label*="Đồng ý"]',
-      'button:has-text("I agree")',
-      'button:has-text("Tôi đồng ý")',
-    ];
-    for (const s of selectors) {
-      const btn = await page.$(s);
-      if (btn) {
-        await btn.click().catch(() => {});
-        await sleep(600);
-        break;
-      }
+/* ---------- Google consent / overlays ---------- */
+async function clickByText(page, selector, texts = []) {
+  const lc = (s) => (s || "").toLowerCase();
+  const handle = await page.$$(selector);
+  for (const el of handle) {
+    const t = lc((await page.evaluate(e => e.innerText || e.textContent || "", el)).trim());
+    if (texts.some(x => t.includes(lc(x)))) {
+      await el.click().catch(()=>{});
+      return true;
     }
-  } catch {}
+  }
+  return false;
 }
 
+async function presetGoogleConsentCookies(page) {
+  const oneYear = Math.floor(Date.now()/1000) + 3600*24*365;
+  await page.setCookie(
+    { name: 'CONSENT', value: 'YES+cb', domain: '.google.com', expires: oneYear, path: '/' },
+    { name: 'SOCS',    value: 'CAI',    domain: '.google.com', expires: oneYear, path: '/' }
+  ).catch(()=>{});
+}
+
+async function dismissGoogleOverlays(page) {
+  // Cookie consent
+  const consentSelectors = [
+    '#L2AGLb',
+    'button[aria-label*="Đồng ý"]',
+    'button[aria-label*="I agree"]',
+    'button[aria-label*="Accept all"]',
+    'button[role="button"][jsname][data-mdc-dialog-action="accept"]'
+  ];
+  for (const s of consentSelectors) {
+    const btn = await page.$(s);
+    if (btn) { await btn.click().catch(()=>{}); await page.waitForTimeout(500).catch(()=>{}); }
+  }
+
+  // “Sign in” / “No thanks”
+  await clickByText(page, 'button', [
+    'no thanks','not now','continue without','skip','maybe later',
+    'không, cảm ơn','bỏ qua','để sau'
+  ]);
+
+  // Escape vài lần
+  await page.keyboard.press('Escape').catch(()=>{});
+  await page.waitForTimeout(150).catch(()=>{});
+  await page.keyboard.press('Escape').catch(()=>{});
+}
+
+/* ---------- User simulation ---------- */
 async function simulateUser(page) {
-  // Không click bừa trong simulateUser để tránh điều hướng bất ngờ
   const hasWheel = typeof page.mouse?.wheel === "function";
-  const rnd = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
-  const safe = async (fn) => {
-    if (page.isClosed()) return;
-    try {
-      await fn();
-    } catch {}
-  };
+  const rnd = (min, max) => Math.floor(Math.random()*(max-min+1))+min;
 
   const actions = [
-    () =>
-      safe(async () => {
-        await page.mouse.move(rnd(80, 1000), rnd(100, 720), { steps: 15 });
-        await sleep(rnd(250, 700));
-      }),
-    () =>
-      safe(async () => {
-        if (hasWheel) await page.mouse.wheel({ deltaY: rnd(200, 800) });
-        else await page.evaluate((dy) => window.scrollBy(0, dy), rnd(200, 800));
-        await sleep(rnd(400, 1100));
-      }),
-    () =>
-      safe(async () => {
-        if (hasWheel) await page.mouse.wheel({ deltaY: -rnd(200, 600) });
-        else await page.evaluate((dy) => window.scrollBy(0, -dy), rnd(200, 600));
-        await sleep(rnd(400, 1100));
-      }),
-    () =>
-      safe(async () => {
-        const links = await page.$$("a");
-        if (!links.length) return;
-        const link = links[rnd(0, links.length - 1)];
-        await link.hover().catch(() => {});
-        await sleep(rnd(300, 700));
-      }),
+    async () => {
+      const x = rnd(100, 1000), y = rnd(100, 700);
+      await page.mouse.move(x, y, { steps: 20 }).catch(()=>{});
+      await page.waitForTimeout(rnd(300,800)).catch(()=>{});
+    },
+    async () => {
+      if (hasWheel) await page.mouse.wheel({ deltaY: rnd(200,800) }).catch(()=>{});
+      else await page.evaluate(dy => window.scrollBy(0, dy), rnd(200,800)).catch(()=>{});
+      await page.waitForTimeout(rnd(500,1200)).catch(()=>{});
+    },
+    async () => {
+      if (hasWheel) await page.mouse.wheel({ deltaY: -rnd(200,600) }).catch(()=>{});
+      else await page.evaluate(dy => window.scrollBy(0, -dy), rnd(200,600)).catch(()=>{});
+      await page.waitForTimeout(rnd(500,1200)).catch(()=>{});
+    },
+    async () => {
+      const links = await page.$$("a");
+      if (links.length) {
+        const link = links[rnd(0, links.length-1)];
+        try {
+          const box = await link.boundingBox();
+          if (box) {
+            await link.hover().catch(()=>{});
+            await page.waitForTimeout(rnd(300,800)).catch(()=>{});
+            if (Math.random() < 0.15) {
+              await Promise.race([
+                link.click({ delay: 100 }).catch(()=>{}),
+                page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 7_000 }).catch(()=>{})
+              ]);
+            }
+          }
+        } catch(e) {
+          // mostly harmless
+        }
+      }
+    }
   ];
 
   const rounds = rnd(6, 12);
-  for (let i = 0; i < rounds; i++) {
-    if (page.isClosed()) break;
-    await actions[rnd(0, actions.length - 1)]();
+  for (let i=0; i<rounds; i++) {
+    const action = actions[rnd(0, actions.length-1)];
+    try { await action(); } catch(e) { /* ignore */ }
   }
 }
 
-// Lấy list href từ SERP, lọc http/https, bỏ javascript:, /search?q=...
+/* ---------- SERP handling ---------- */
 async function extractSerpHrefs(page) {
-  const hrefs = await page.$$eval("a", (as) =>
-    as
-      .map((a) => a.getAttribute("href") || "")
-      .filter(Boolean)
-      .filter((h) => /^https?:\/\//i.test(h))
+  const hrefs = await page.$$eval("a", as =>
+    as.map(a => a.getAttribute("href") || "").filter(Boolean)
   );
-  // loại các link google “tiện ích” nếu có
-  return hrefs.filter((h) => !/\/search\?|\/imgres\?/.test(h));
-}
-
-function hostnameIncludes(href, targetDomain) {
-  try {
-    const u = new URL(href);
-    return u.hostname.toLowerCase().includes(targetDomain);
-  } catch {
-    return href.toLowerCase().includes(targetDomain);
-  }
+  // clean typical google wrappers
+  return hrefs
+    .map(h => {
+      if (h.startsWith("/url?q=")) {
+        try {
+          const u = new URL("https://www.google.com" + h);
+          return u.searchParams.get("q") || "";
+        } catch { return ""; }
+      }
+      if (h.startsWith("/")) return "";
+      return h;
+    })
+    .filter(Boolean);
 }
 
 async function doGoogleSearch(i, browser, keyword, targetDomain) {
   const page = await browser.newPage();
+  page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+  page.setDefaultTimeout(60_000);
 
-  // Truy cập Google
-  await page.goto("https://www.google.com/?hl=vi", {
+  // Giảm consent trước khi vào
+  await presetGoogleConsentCookies(page);
+
+  // Vào Google
+  await page.goto("https://www.google.com/?hl=vi&pccc=1", {
     waitUntil: "domcontentloaded",
-    timeout: 60000,
-  });
-  await ensureGoogleReady(page);
+    timeout: NAV_TIMEOUT_MS,
+  }).catch(()=>{});
+  await dismissGoogleOverlays(page);
 
-  // Nhập keyword
-  await page.waitForSelector('textarea[name="q"]', { timeout: 20000 });
+  // Search
+  await page.waitForSelector('textarea[name="q"]', { timeout: 20_000 });
   await page.type('textarea[name="q"]', keyword, { delay: 60 });
   await page.keyboard.press("Enter");
 
-  await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60000 });
-  await sleep(800);
+  // Chờ kết quả thay vì waitForNavigation cứng
+  let ok = await Promise.race([
+    page.waitForFunction(() => location.pathname === '/search' || !!document.querySelector('#search'), { timeout: NAV_TIMEOUT_MS }),
+    page.waitForSelector('#search', { timeout: NAV_TIMEOUT_MS })
+  ]).then(()=>true).catch(()=>false);
 
-  console.log(`[${i}] Search: "${keyword}" -> looking for "${targetDomain}"`);
+  if (!ok) {
+    // Thử lại bằng URL trực tiếp
+    const q = encodeURIComponent(keyword);
+    await page.goto(`https://www.google.com/search?q=${q}&hl=vi&pccc=1`, {
+      waitUntil: "domcontentloaded",
+      timeout: NAV_TIMEOUT_MS,
+    }).catch(()=>{});
+    await dismissGoogleOverlays(page);
+  }
+  await page.waitForTimeout(800).catch(()=>{});
 
-  // Lấy các href ngoài SERP
-  const hrefs = await extractSerpHrefs(page);
+  console.log(`[${i}] Search: "${keyword}" -> domain contains "${targetDomain}"`);
 
-  // Tìm link chứa domain
-  let clicked = false;
-  for (const href of hrefs) {
-    if (!hostnameIncludes(href, targetDomain)) continue;
+  // Lấy link
+  let hrefs = [];
+  try {
+    hrefs = await extractSerpHrefs(page);
+  } catch {}
 
-    console.log(`[${i}] ✅ Found result: ${href}`);
-    // Điều hướng bằng goto để tránh dùng ElementHandle cũ -> an toàn hơn
-    await page.goto(href, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+  // Tìm link mục tiêu
+  const target = hrefs.find(h => h.toLowerCase().includes(targetDomain));
+  if (target) {
+    console.log(`[${i}] ✅ Found: ${target}`);
+    await page.goto(target, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS }).catch(()=>{});
     await simulateUser(page);
-    clicked = true;
-    break;
+  } else {
+    // Không thấy → log top
+    const tops = hrefs.slice(0,10);
+    console.log(`[${i}] No target link. Top hrefs:\n${tops.join("\n")}`);
+    await simulateUser(page);
   }
 
-  if (!clicked) {
-    console.log(`[${i}] No target link found. Top hrefs:`);
-    hrefs.slice(0, 8).forEach((h, idx) => console.log(`[${i}]   [${idx + 1}] ${h}`));
-    await simulateUser(page);
-  }
-
-  await page.close();
+  await page.close().catch(()=>{});
 }
 
+/* ---------- per-run ---------- */
 async function runOne(i) {
   let profileId = null;
   let browser = null;
@@ -228,7 +257,7 @@ async function runOne(i) {
     const profile = await gologin.createProfileRandomFingerprint();
     profileId = profile.id;
 
-    // Gán proxy thủ công vào profile
+    // Patch proxy
     await gologin.changeProfileProxy(profileId, {
       mode: PROXY_MODE,
       host: PROXY_HOST,
@@ -237,24 +266,32 @@ async function runOne(i) {
       password: PROXY_PASSWORD,
     });
 
-    // Nghỉ nhẹ để patch proxy ổn định
-    await sleep(600);
+    await sleep(800);
 
     console.log(`[${i}] Launching profile ${profileId}...`);
     const launched = await gologin.launch({ profileId });
     browser = launched.browser;
 
+    // (tuỳ chọn) check IP nhanh
+    try {
+      const p = await browser.newPage();
+      await p.goto("https://api.ipify.org", { waitUntil: "domcontentloaded", timeout: 45_000 });
+      const ip = await p.evaluate(() => document.body?.innerText || "");
+      console.log(`[${i}] Public IP: ${ip}`);
+      await p.close().catch(()=>{});
+    } catch (e) {
+      console.warn(`[${i}] IP check warn:`, safeMsg(e));
+    }
+
+    // Thực hiện tìm kiếm + mô phỏng
     await doGoogleSearch(i, browser, KEYWORD, TARGET_DOMAIN);
 
-    // Random idle 2–5s giữa các vòng nếu muốn
-    await sleep(2000 + Math.floor(Math.random() * 3000));
+    // nghỉ ngẫu nhiên chút giữa các vòng (nếu bạn lặp ở đây)
+    await sleep(1_000 + Math.floor(Math.random()*2_000));
   } catch (err) {
     logErr(i, err);
   } finally {
-    try {
-      if (browser) await browser.close();
-    } catch {}
-
+    try { if (browser) await browser.close(); } catch{}
     if (profileId) {
       try {
         await gologin.deleteProfile(profileId);
@@ -266,16 +303,16 @@ async function runOne(i) {
   }
 }
 
+/* ---------- main loop ---------- */
 async function main() {
   console.log(`[INFO] Concurrency = ${CONCURRENCY}`);
-  // Batch đầu
+  // batch đầu
   await Promise.all(Array.from({ length: CONCURRENCY }, (_, idx) => runOne(idx + 1)));
 
-  // Lặp batch vô hạn
+  // lặp vô hạn batch kế tiếp
   while (true) {
     await Promise.all(Array.from({ length: CONCURRENCY }, (_, idx) => runOne(idx + 1)));
-    // nghỉ ngắn giữa các batch để tự nhiên hơn
-    await sleep(3000 + Math.floor(Math.random() * 4000));
+    await sleep(3_000 + Math.floor(Math.random()*4_000));
   }
 }
 
