@@ -216,14 +216,14 @@ async function runOne(i) {
     profileId = profile.id;
     totalProfilesCreated++;
 
-    // await gologin.changeProfileProxy(profileId, {
-    //   mode: PROXY_MODE,
-    //   host: PROXY_HOST,
-    //   port: Number(PROXY_PORT),
-    //   username: PROXY_USERNAME,
-    //   password: PROXY_PASSWORD,
-    // });
-    // await sleep(600);
+    await gologin.changeProfileProxy(profileId, {
+      mode: PROXY_MODE,
+      host: PROXY_HOST,
+      port: Number(PROXY_PORT),
+      username: PROXY_USERNAME,
+      password: PROXY_PASSWORD,
+    });
+    await sleep(600);
 
     console.log(`[${i}] Launching profile ${profileId}...`);
     const launched = await gologin.launch({ profileId });
