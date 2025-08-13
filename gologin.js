@@ -30,13 +30,16 @@ if (!PROXY_PASSWORD) throw new Error("Missing PROXY_PASSWORD");
 const gologin = GologinApi({ token: GL_API_TOKEN });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ======= THỐNG KÊ/BỘ ĐẾM TRONG BỘ NHỚ =======
+const START_TIME = Date.now();
 let successClicks = 0;
 let proxyErrorCount = 0;
-
-function saveStats() {
-  const log = `[${new Date().toISOString()}] Total successful clicks: ${successClicks}\n`;
-  fs.appendFileSync("click_stats.txt", log);
-}
+let totalProfilesCreated = 0;
+let totalProfilesLaunched = 0;
+let totalBatches = 0;
+let wroteStats = false;
+let running = true;
+// =============================================
 
 function safeMsg(err) {
   if (!err) return "Unknown error";
@@ -53,13 +56,21 @@ function logErr(i, err) {
     try { parsedBody = JSON.parse(body); } catch { parsedBody = body; }
   }
   const msg = safeMsg(err);
-  if (msg.includes("Proxy Error") || msg.includes("tunneling socket could not be established")) {
+
+  if (
+    /Proxy Error/i.test(msg) ||
+    /tunneling socket could not be established/i.test(msg) ||
+    /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(msg)
+  ) {
     proxyErrorCount++;
+    console.error(`⚠️  Proxy error count = ${proxyErrorCount}`);
     if (proxyErrorCount >= 10) {
       console.error(`❌ Proxy lỗi liên tục ${proxyErrorCount} lần. Thoát chương trình.`);
-      process.exit(1);
+      shutdown(1);
+      return;
     }
   }
+
   console.error(
     `------------------------------------------------------------\n` +
     `[${i}] ERROR >>> ${msg}\n` +
@@ -95,6 +106,20 @@ async function simulateUser(page) {
         await page.evaluate((dy) => window.scrollBy(0, dy), random(200, 800));
       }
       await sleep(random(400, 900));
+    },
+    async () => {
+      if (!RANDOM_LINK_CLICK) return;
+      const links = await page.$$("a");
+      if (links.length) {
+        const link = links[random(0, links.length - 1)];
+        try {
+          const box = await link.boundingBox();
+          if (box && box.width > 1 && box.height > 1) {
+            await link.hover();
+            await sleep(random(200, 500));
+          }
+        } catch {}
+      }
     }
   ];
   const rounds = random(3, 6);
@@ -143,16 +168,35 @@ async function doGoogleSearch(i, browser, keyword, targetDomain) {
       href = (await link.evaluate(el => el.getAttribute("href") || "")).toLowerCase();
     } catch {}
     if (!href) continue;
+
     if (href.includes(targetDomain)) {
       successClicks++;
       console.log(`🎯 [${i}] CLICK SUCCESS → ${href} (Total: ${successClicks})`);
-      saveStats();
 
-      await Promise.allSettled([
-        link.click({ delay: 80 }),
-        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }),
-      ]);
-      await simulateUser(page);
+      if (OPEN_RESULT_IN_NEW_TAB) {
+        const before = await browser.pages();
+        await Promise.allSettled([
+          link.click({ button: "middle", delay: 80 }),
+          page.waitForNetworkIdle?.({ idleTime: 800, timeout: 8000 }).catch(() => {})
+        ]);
+        await sleep(1200);
+        const after = await browser.pages();
+        const newTab = after.find(p => !before.includes(p));
+        if (newTab) {
+          await newTab.bringToFront();
+          await simulateUser(newTab);
+          if (SINGLE_TAB_ONLY) await newTab.close();
+        } else {
+          await simulateUser(page);
+        }
+      } else {
+        await Promise.allSettled([
+          link.click({ delay: 80 }),
+          page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }),
+        ]);
+        await simulateUser(page);
+      }
+
       await page.close();
       return;
     }
@@ -170,18 +214,22 @@ async function runOne(i) {
     console.log(`[${i}] Creating profile...`);
     const profile = await gologin.createProfileRandomFingerprint();
     profileId = profile.id;
-    await gologin.changeProfileProxy(profileId, {
-      mode: PROXY_MODE,
-      host: PROXY_HOST,
-      port: Number(PROXY_PORT),
-      username: PROXY_USERNAME,
-      password: PROXY_PASSWORD,
-    });
-    await sleep(600);
+    totalProfilesCreated++;
+
+    // await gologin.changeProfileProxy(profileId, {
+    //   mode: PROXY_MODE,
+    //   host: PROXY_HOST,
+    //   port: Number(PROXY_PORT),
+    //   username: PROXY_USERNAME,
+    //   password: PROXY_PASSWORD,
+    // });
+    // await sleep(600);
 
     console.log(`[${i}] Launching profile ${profileId}...`);
     const launched = await gologin.launch({ profileId });
     browser = launched.browser;
+    totalProfilesLaunched++;
+
     if (SINGLE_TAB_ONLY) await closeBlankTabs(browser);
 
     await doGoogleSearch(i, browser, KEYWORD, TARGET_DOMAIN);
@@ -201,12 +249,76 @@ async function runOne(i) {
   }
 }
 
-async function main() {
-  console.log(`[INFO] Concurrency = ${CONCURRENCY}`);
-  while (true) {
-    const tasks = Array.from({ length: CONCURRENCY }, (_, idx) => runOne(idx + 1));
-    await Promise.all(tasks);
+async function runBatch() {
+  const tasks = Array.from({ length: CONCURRENCY }, (_, idx) => runOne(idx + 1));
+  await Promise.all(tasks);
+  totalBatches++;
+}
+
+// ======= GHI THỐNG KÊ KHI THOÁT =======
+function writeStatsToFile() {
+  if (wroteStats) return;
+  wroteStats = true;
+
+  const end = Date.now();
+  const durationSec = Math.round((end - START_TIME) / 1000);
+  const summary =
+    `[${new Date().toISOString()}] SUMMARY\n` +
+    `  Duration        : ${durationSec}s\n` +
+    `  Success clicks  : ${successClicks}\n` +
+    `  Profiles created: ${totalProfilesCreated}\n` +
+    `  Profiles launched: ${totalProfilesLaunched}\n` +
+    `  Batches run     : ${totalBatches}\n` +
+    `  ProxyErr count  : ${proxyErrorCount}\n` +
+    `----------------------------------------\n`;
+
+  try {
+    fs.appendFileSync("click_stats.txt", summary);
+    console.log("📝 Stats written to click_stats.txt");
+  } catch (e) {
+    console.error("Cannot write stats file:", e?.message || e);
   }
 }
 
-main().catch(console.error).finally(gologin.exit);
+function shutdown(code = 0) {
+  if (!running) return;
+  running = false;
+  writeStatsToFile();
+  try { gologin.exit(); } catch {}
+  process.exit(code);
+}
+
+process.on("SIGINT", () => {
+  console.log("\n👋 Caught SIGINT. Saving stats and exiting...");
+  shutdown(0);
+});
+process.on("SIGTERM", () => {
+  console.log("\n👋 Caught SIGTERM. Saving stats and exiting...");
+  shutdown(0);
+});
+process.on("uncaughtException", (err) => {
+  console.error("❗ Uncaught Exception:", err);
+  shutdown(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("❗ Unhandled Rejection:", reason);
+  shutdown(1);
+});
+process.on("exit", () => {
+  writeStatsToFile();
+});
+// =======================================
+
+async function main() {
+  console.log(`[INFO] Concurrency = ${CONCURRENCY}`);
+  while (running) {
+    await runBatch();
+    // Nghỉ nếu muốn giữa các batch:
+    // await sleep(3000 + Math.floor(Math.random() * 4000));
+  }
+}
+
+main().catch((e) => {
+  console.error("Fatal error:", e);
+  shutdown(1);
+});
